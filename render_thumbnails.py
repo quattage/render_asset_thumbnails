@@ -49,7 +49,7 @@ class RenderAssetsThumbnail(bpy.types.Operator):
                 self.select_all_objects_in_collection(collection)
                 return collection
 
-    # Custom context is needed as of 3.0+ to invoke the operator here
+    # Custom context is needed as of 4.0+ to invoke the operator here
     def update_thumbnail(self, context, asset: bpy.types.FileSelectEntry, location: str) -> None:
         with context.temp_override(id=asset.local_id):
             bpy.ops.ed.lib_id_load_custom_preview(
