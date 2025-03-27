@@ -32,9 +32,8 @@ class RenderAssetsThumbnail(bpy.types.Operator):
             obj.hide_render = True
 
     def enable_visible_objects(self) -> None:
-        if self.visible_objects:
-            for obj in self.visible_objects:
-                obj.hide_render = False
+        for obj in self.visible_objects:
+            obj.hide_render = False
 
     def enable_and_select(self, asset):
         if isinstance(asset, bpy.types.Object):
@@ -49,12 +48,17 @@ class RenderAssetsThumbnail(bpy.types.Operator):
                 self.select_all_objects_in_collection(collection)
                 return collection
 
-    # Custom context is needed as of 4.0+ to invoke the operator here
+    # 4.0+ Overridden context for loading assets
     def update_thumbnail(self, context, asset: bpy.types.FileSelectEntry, location: str) -> None:
-        with context.temp_override(id=asset.local_id):
+        if bpy.app.version >= (4, 0, 0):
+            with context.temp_override(id=asset.local_id):
+                bpy.ops.ed.lib_id_load_custom_preview(
+                    filepath=f"{location}/{asset.local_id.name}.png"
+                )
+        else:
             bpy.ops.ed.lib_id_load_custom_preview(
-                filepath=f"{location}/{asset.local_id.name}.png"
-            )
+                {"id": asset.local_id},
+                filepath=f"{location}/{asset.local_id.name}.png")
 
     def get_area_type(self, _type: str) -> bpy.types.Area or None:
         if not _type:
@@ -99,7 +103,8 @@ class RenderAssetsThumbnail(bpy.types.Operator):
                     return
 
                 # Get collection to which object belongs to
-                collection_dir = f"{self.thumb_dir}/{''.join(self.get_collection_name(active_obj).split())}"
+                filename = bpy.path.basename(bpy.context.blend_data.filepath).replace(".blend", "")
+                collection_dir = f"{self.thumb_dir}/{filename}_{''.join(self.get_collection_name(active_obj).split())}"
 
                 bpy.ops.view3d.camera_to_view_selected()
                 bpy.data.scenes[0].render.filepath = os.path.join(collection_dir, active_obj.name + '.png')
@@ -132,6 +137,8 @@ class RenderAssetsThumbnail(bpy.types.Operator):
             'resolution_x': bpy.data.scenes[0].render.resolution_x,
             'resolution_y': bpy.data.scenes[0].render.resolution_y,
             'film_transparent': bpy.context.scene.render.film_transparent,
+            'use_nodes': bpy.context.scene.use_nodes,
+            'file_format': bpy.context.scene.render.image_settings.file_format,
             'color_mode': bpy.context.scene.render.image_settings.color_mode,
             'cam': bpy.context.scene.camera.copy()
         }
@@ -147,6 +154,8 @@ class RenderAssetsThumbnail(bpy.types.Operator):
         bpy.data.scenes[0].render.resolution_x = 200
         bpy.data.scenes[0].render.resolution_y = 200
         bpy.context.scene.render.film_transparent = True
+        bpy.context.scene.use_nodes = False
+        bpy.context.scene.render.image_settings.file_format = 'PNG'
         bpy.context.scene.render.image_settings.color_mode = 'RGBA'
 
     def restore_render_settings(self):
@@ -154,6 +163,8 @@ class RenderAssetsThumbnail(bpy.types.Operator):
             bpy.data.scenes[0].render.resolution_x = self._settings['resolution_x']
             bpy.data.scenes[0].render.resolution_y = self._settings['resolution_y']
             bpy.context.scene.render.film_transparent = self._settings['film_transparent']
+            bpy.context.scene.use_nodes = self._settings['use_nodes']
+            bpy.context.scene.render.image_settings.file_format = self._settings['file_format']
             bpy.context.scene.render.image_settings.color_mode = self._settings['color_mode']
             bpy.context.scene.camera.rotation_euler = self._settings['cam'].rotation_euler
             bpy.context.scene.camera.location = self._settings['cam'].location
