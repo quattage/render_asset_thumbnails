@@ -5,8 +5,8 @@ import os
 bl_info = {
     "name": "Render asset thumbnail",
     "author": "GruntWorks",
-    "blender": (3, 2, 0),
-    "version": (0, 2),
+    "blender": (4, 4, 0),
+    "version": (0, 2, 1),
     "location": "ASSETS",
     "description": "Renders selected asset thumbnail from asset browser to folder with current collection name.",
     "category": "User Interface",
@@ -20,11 +20,11 @@ class RenderAssetsThumbnail(bpy.types.Operator):
     thumb_dir = ''
     visible_objects = []
     _settings = {}  # This is to revert render settings after executing
-    allowed_types = [bpy.types.Object, bpy.types.Collection]
+    allowed_types = ["COLLECTION", "OBJECT"]
 
     @classmethod
     def poll(cls, context):
-        return context.selected_asset_files
+        return context.selected_assets
 
     def disable_visible_objects(self) -> None:
         self.visible_objects = [obj for obj in bpy.data.objects if obj.hide_render == False]
@@ -32,9 +32,8 @@ class RenderAssetsThumbnail(bpy.types.Operator):
             obj.hide_render = True
 
     def enable_visible_objects(self) -> None:
-        if self.visible_objects:
-            for obj in self.visible_objects:
-                obj.hide_render = False
+        for obj in self.visible_objects:
+            obj.hide_render = False
 
     def enable_and_select(self, asset):
         if isinstance(asset, bpy.types.Object):
@@ -49,10 +48,17 @@ class RenderAssetsThumbnail(bpy.types.Operator):
                 self.select_all_objects_in_collection(collection)
                 return collection
 
-    def update_thumbnail(self, asset: bpy.types.FileSelectEntry, location: str) -> None:
-        bpy.ops.ed.lib_id_load_custom_preview(
-            {"id": asset.local_id},
-            filepath=f"{location}/{asset.local_id.name}.png")
+    # 4.0+ Overridden context for loading assets
+    def update_thumbnail(self, context, asset: bpy.types.FileSelectEntry, location: str) -> None:
+        if bpy.app.version >= (4, 0, 0):
+            with context.temp_override(id=asset.local_id):
+                bpy.ops.ed.lib_id_load_custom_preview(
+                    filepath=f"{location}/{asset.local_id.name}.png"
+                )
+        else:
+            bpy.ops.ed.lib_id_load_custom_preview(
+                {"id": asset.local_id},
+                filepath=f"{location}/{asset.local_id.name}.png")
 
     def get_area_type(self, _type: str) -> bpy.types.Area or None:
         if not _type:
@@ -82,7 +88,7 @@ class RenderAssetsThumbnail(bpy.types.Operator):
         for sub_collection in collection.children:
             self.select_all_objects_in_collection(sub_collection)
 
-    def render_thumbnail(self, assets: List[bpy.types.FileSelectEntry]) -> None:
+    def render_thumbnail(self, context, assets: List[bpy.types.FileSelectEntry]) -> None:
         executed_objects = {}
         bpy.context.window_manager.progress_begin(0, len(assets))
         for idx, asset in enumerate(assets):
@@ -90,30 +96,31 @@ class RenderAssetsThumbnail(bpy.types.Operator):
             bpy.ops.object.select_all(action='DESELECT')
 
             # This operation supports only mesh objects and collections
-            if any(isinstance(asset.asset_data.id_data, allowed_type) for allowed_type in self.allowed_types):
-                active_obj = self.enable_and_select(asset.asset_data.id_data)
+            if asset.id_type in self.allowed_types:
+                active_obj = self.enable_and_select(asset.local_id)
                 if not active_obj:
                     executed_objects[active_obj.name] = 'ERROR'
                     return
 
                 # Get collection to which object belongs to
-                collection_dir = f"{self.thumb_dir}/{''.join(self.get_collection_name(active_obj).split())}"
+                filename = bpy.path.basename(bpy.context.blend_data.filepath).replace(".blend", "")
+                collection_dir = f"{self.thumb_dir}/{filename}_{''.join(self.get_collection_name(active_obj).split())}"
 
                 bpy.ops.view3d.camera_to_view_selected()
                 bpy.data.scenes[0].render.filepath = os.path.join(collection_dir, active_obj.name + '.png')
                 bpy.ops.render.render(write_still=True)
-                self.update_thumbnail(assets[idx], collection_dir)
+                self.update_thumbnail(context, assets[idx], collection_dir)
                 executed_objects[active_obj.name] = 'INFO'
                 active_obj.hide_render = True
                 bpy.context.window_manager.progress_update(idx)
             else:
-                executed_objects[asset.asset_data.id_data.name] = 'ERROR'
+                executed_objects[asset.local_id.name] = 'ERROR'
         bpy.context.window_manager.progress_end()
 
         # Show report
         for obj in executed_objects:
             self.report({executed_objects[obj]},
-                        f"{'Update' if executed_objects[obj] == 'INFO' else 'Skip'} thumbnail for: {obj}")
+                        f"{'Update' if executed_objects[obj] == 'INFO' else 'Skipped'} thumbnail for '{obj}'")
         self.report({'OPERATOR'}, f"Asset Catalog updated")
         bpy.ops.screen.info_log_show()
 
@@ -130,6 +137,8 @@ class RenderAssetsThumbnail(bpy.types.Operator):
             'resolution_x': bpy.data.scenes[0].render.resolution_x,
             'resolution_y': bpy.data.scenes[0].render.resolution_y,
             'film_transparent': bpy.context.scene.render.film_transparent,
+            'use_nodes': bpy.context.scene.use_nodes,
+            'file_format': bpy.context.scene.render.image_settings.file_format,
             'color_mode': bpy.context.scene.render.image_settings.color_mode,
             'cam': bpy.context.scene.camera.copy()
         }
@@ -145,6 +154,8 @@ class RenderAssetsThumbnail(bpy.types.Operator):
         bpy.data.scenes[0].render.resolution_x = 200
         bpy.data.scenes[0].render.resolution_y = 200
         bpy.context.scene.render.film_transparent = True
+        bpy.context.scene.use_nodes = False
+        bpy.context.scene.render.image_settings.file_format = 'PNG'
         bpy.context.scene.render.image_settings.color_mode = 'RGBA'
 
     def restore_render_settings(self):
@@ -152,6 +163,8 @@ class RenderAssetsThumbnail(bpy.types.Operator):
             bpy.data.scenes[0].render.resolution_x = self._settings['resolution_x']
             bpy.data.scenes[0].render.resolution_y = self._settings['resolution_y']
             bpy.context.scene.render.film_transparent = self._settings['film_transparent']
+            bpy.context.scene.use_nodes = self._settings['use_nodes']
+            bpy.context.scene.render.image_settings.file_format = self._settings['file_format']
             bpy.context.scene.render.image_settings.color_mode = self._settings['color_mode']
             bpy.context.scene.camera.rotation_euler = self._settings['cam'].rotation_euler
             bpy.context.scene.camera.location = self._settings['cam'].location
@@ -183,7 +196,7 @@ class RenderAssetsThumbnail(bpy.types.Operator):
             os.mkdir(self.thumb_dir)
 
         self.disable_visible_objects()
-        self.render_thumbnail([asset for asset in bpy.context.selected_asset_files])
+        self.render_thumbnail(context, [assetrep for assetrep in context.selected_assets])
         self.enable_visible_objects()
 
         self.restore_render_settings()
